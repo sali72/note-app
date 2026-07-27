@@ -28,11 +28,15 @@ from app.core.services.password_service import PasswordService
 logger = get_logger(__name__)
 
 
+from app.auth.services.session_service import SessionService
+from app.auth.services.token_service import TokenService
+
+
 class AuthFacade:
     """
     Facade for authentication business logic and orchestration.
-    Coordinates between repository, JWT service, password service, email service,
-    and token blacklist.
+    Coordinates between repository, token service, session service, password service,
+    email service, and token blacklist.
     """
 
     def __init__(
@@ -50,6 +54,13 @@ class AuthFacade:
         self.email_service = email_service
         self.token_blacklist = token_blacklist
         self.config = config
+        self.token_service = TokenService(jwt_service=jwt_service, config=config)
+        self.session_service = SessionService(
+            session_repository=repository._session_repo,
+            token_service=self.token_service,
+            token_blacklist=token_blacklist,
+            config=config,
+        )
 
     async def register(self, email: str, password: str) -> User:
         """
@@ -239,67 +250,23 @@ class AuthFacade:
         return new_access_token, new_refresh_token, user
 
     async def get_user_sessions(
-        self, user: User, current_access_token: Optional[str] = None
+        self, user: User, current_access_token: Optional[str]
     ) -> list[SessionResponse]:
-        """Fetch active session device families for the user."""
-        active_tokens = await self.repository.find_active_sessions_by_user(user.id)
-        current_family = None
-        if current_access_token:
-            try:
-                payload = self.jwt_service.decode_token(current_access_token)
-                current_family = payload.get("fam")
-            except Exception:
-                pass
-
-        sessions = []
-        for token_doc in active_tokens:
-            device_name, browser, os_name = parse_user_agent(token_doc.user_agent)
-            is_current = (current_family is not None) and (token_doc.family_id == current_family)
-            sessions.append(
-                SessionResponse(
-                    family_id=token_doc.family_id,
-                    device_name=device_name,
-                    browser=browser,
-                    os=os_name,
-                    ip_address=token_doc.ip_address,
-                    created_at=token_doc.created_at,
-                    last_used_at=token_doc.last_used_at,
-                    is_current=is_current,
-                )
-            )
-        return sessions
+        """Retrieve active sessions for user, marking is_current for requesting device."""
+        return await self.session_service.get_user_sessions(
+            user=user, current_access_token=current_access_token
+        )
 
     async def revoke_session(self, user: User, family_id: str) -> None:
         """Revoke a specific session family for the user instantly."""
-        await self.repository.revoke_token_family(family_id)
-        # Blacklist session family in Redis for max access token lifetime
-        ttl = self.config.access_token_expire_minutes * 60
-        await self.token_blacklist.blacklist(f"fam:{family_id}", ttl)
+        await self.session_service.revoke_session(user=user, family_id=family_id)
 
     async def revoke_other_sessions(
         self, user: User, current_access_token: Optional[str]
     ) -> int:
         """Revoke all active session families for user except current family instantly."""
-        if not current_access_token:
-            raise ValueError("Current access token missing")
-        try:
-            payload = self.jwt_service.decode_token(current_access_token)
-            current_family_id = payload.get("fam")
-        except Exception:
-            raise ValueError("Invalid access token")
-
-        if not current_family_id:
-            raise ValueError("Current session family identifier missing")
-
-        # Find active session families for user to blacklist them in Redis
-        active_tokens = await self.repository.find_active_sessions_by_user(user.id)
-        ttl = self.config.access_token_expire_minutes * 60
-        for token_doc in active_tokens:
-            if token_doc.family_id != current_family_id:
-                await self.token_blacklist.blacklist(f"fam:{token_doc.family_id}", ttl)
-
-        return await self.repository.revoke_all_other_families(
-            user_id=user.id, current_family_id=current_family_id
+        return await self.session_service.revoke_other_sessions(
+            user=user, current_access_token=current_access_token
         )
 
     async def get_user_by_id(self, user_id: str) -> Optional[User]:

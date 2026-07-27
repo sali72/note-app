@@ -3,9 +3,11 @@ from fastapi import Depends, HTTPException, status, Request
 from app.auth.config import AuthModuleConfig
 from app.auth.db.models import User
 from app.auth.db.repository import UserRepository
+from app.auth.db.session_repository import SessionRepository
 from app.auth.facade.auth_facade import AuthFacade
 from app.auth.services.cookie_service import CookieService
 from app.auth.services.token_blacklist import TokenBlacklistService
+from app.auth.services.token_service import TokenService
 from app.core.config import Settings
 from app.core.deps.services import get_email_service, get_jwt_service, get_password_service
 from app.core.deps.settings import get_settings
@@ -14,16 +16,23 @@ from app.core.services.jwt_service import JWTService
 from app.core.services.password_service import PasswordService
 
 
-# ---------------------------------------------------------------------------
-# Plain-dependency factories (no FastAPI dependencies)
-# ---------------------------------------------------------------------------
-
 def get_auth_config() -> AuthModuleConfig:
     return AuthModuleConfig()
 
 
 def get_user_repository() -> UserRepository:
     return UserRepository()
+
+
+def get_session_repository() -> SessionRepository:
+    return SessionRepository()
+
+
+def get_token_service(
+    jwt_service: JWTService = Depends(get_jwt_service),
+    config: AuthModuleConfig = Depends(get_auth_config),
+) -> TokenService:
+    return TokenService(jwt_service=jwt_service, config=config)
 
 
 def get_cookie_service(
