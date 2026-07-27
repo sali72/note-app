@@ -193,6 +193,10 @@ class AuthFacade:
         # 2 – Link by email
         user = await self.repository.find_by_email(email)
         if user:
+            if not user.is_verified and user.hashed_password is not None:
+                # Prevent Pre-Account Takeover: clear password if unverified
+                await self.repository.update_password(user.id, None)
+
             user = await self.repository.link_google_account(user.id, google_id)
             if not user:
                 raise ValueError("Failed to link Google account")

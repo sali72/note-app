@@ -135,7 +135,7 @@ class UserRepository:
     async def update_password(
         self,
         user_id: PydanticObjectId,
-        hashed_password: str,
+        hashed_password: Optional[str],
     ) -> Optional[User]:
         try:
             user = await self.model.find_one({"_id": user_id}).update(
