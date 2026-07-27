@@ -133,6 +133,20 @@ class AuthFacade:
         """Compute SHA256 hex digest of a raw refresh token."""
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
+    def _generate_token(self, user: User, family_id: Optional[str] = None) -> str:
+        """Create a signed JWT for the given user, embedding family_id if provided."""
+        token_data = {
+            "sub": str(user.id),
+            "email": user.email,
+            "type": "access",
+            "jti": str(uuid.uuid4()),
+            "exp": datetime.now(timezone.utc)
+            + timedelta(minutes=self.config.access_token_expire_minutes),
+        }
+        if family_id:
+            token_data["fam"] = family_id
+        return self.jwt_service.encode_token(token_data)
+
     async def create_session_tokens(
         self,
         user: User,
@@ -145,10 +159,10 @@ class AuthFacade:
         Returns:
             (access_token, raw_refresh_token)
         """
-        access_token = self._generate_token(user)
+        token_family = family_id or str(uuid.uuid4())
+        access_token = self._generate_token(user, family_id=token_family)
         raw_refresh_token = secrets.token_urlsafe(64)
         token_hash = self._hash_token(raw_refresh_token)
-        token_family = family_id or str(uuid.uuid4())
         expires_at = datetime.now(timezone.utc) + timedelta(
             days=self.config.refresh_token_expire_days
         )
@@ -254,17 +268,17 @@ class AuthFacade:
         return new_access_token, new_refresh_token, user
 
     async def get_user_sessions(
-        self, user: User, current_raw_refresh_token: Optional[str] = None
+        self, user: User, current_access_token: Optional[str] = None
     ) -> list[SessionResponse]:
         """Fetch active session device families for the user."""
         active_tokens = await self.repository.find_active_sessions_by_user(user.id)
-        current_hash = self._hash_token(current_raw_refresh_token) if current_raw_refresh_token else None
-        current_token_doc = (
-            await self.repository.find_refresh_token_by_hash(current_hash)
-            if current_hash
-            else None
-        )
-        current_family = current_token_doc.family_id if current_token_doc else None
+        current_family = None
+        if current_access_token:
+            try:
+                payload = self.jwt_service.decode_token(current_access_token)
+                current_family = payload.get("fam")
+            except Exception:
+                pass
 
         sessions = []
         for token_doc in active_tokens:
@@ -285,22 +299,36 @@ class AuthFacade:
         return sessions
 
     async def revoke_session(self, user: User, family_id: str) -> None:
-        """Revoke a specific session family for the user."""
+        """Revoke a specific session family for the user instantly."""
         await self.repository.revoke_token_family(family_id)
+        # Blacklist session family in Redis for max access token lifetime
+        ttl = self.config.access_token_expire_minutes * 60
+        await self.token_blacklist.blacklist(f"fam:{family_id}", ttl)
 
     async def revoke_other_sessions(
-        self, user: User, current_raw_refresh_token: Optional[str]
+        self, user: User, current_access_token: Optional[str]
     ) -> int:
-        """Revoke all active session families for user except the current requesting family."""
-        if not current_raw_refresh_token:
-            raise ValueError("Current session refresh token missing")
-        current_hash = self._hash_token(current_raw_refresh_token)
-        current_token_doc = await self.repository.find_refresh_token_by_hash(current_hash)
-        if not current_token_doc or current_token_doc.is_revoked:
-            raise ValueError("Current session is invalid or revoked")
+        """Revoke all active session families for user except current family instantly."""
+        if not current_access_token:
+            raise ValueError("Current access token missing")
+        try:
+            payload = self.jwt_service.decode_token(current_access_token)
+            current_family_id = payload.get("fam")
+        except Exception:
+            raise ValueError("Invalid access token")
+
+        if not current_family_id:
+            raise ValueError("Current session family identifier missing")
+
+        # Find active session families for user to blacklist them in Redis
+        active_tokens = await self.repository.find_active_sessions_by_user(user.id)
+        ttl = self.config.access_token_expire_minutes * 60
+        for token_doc in active_tokens:
+            if token_doc.family_id != current_family_id:
+                await self.token_blacklist.blacklist(f"fam:{token_doc.family_id}", ttl)
 
         return await self.repository.revoke_all_other_families(
-            user_id=user.id, current_family_id=current_token_doc.family_id
+            user_id=user.id, current_family_id=current_family_id
         )
 
     async def get_user_by_id(self, user_id: str) -> Optional[User]:
@@ -321,21 +349,9 @@ class AuthFacade:
 
         return await self.repository.find_by_id(obj_id)
 
-    def _generate_token(self, user: User) -> str:
-        """Create a signed JWT for the given user."""
-        token_data = {
-            "sub": str(user.id),
-            "email": user.email,
-            "type": "access",
-            "jti": str(uuid.uuid4()),
-            "exp": datetime.now(timezone.utc)
-            + timedelta(minutes=self.config.access_token_expire_minutes),
-        }
-        return self.jwt_service.encode_token(token_data)
-
     async def verify_token(self, token: str) -> Optional[User]:
         """
-        Decode and verify a JWT, checking the Redis blacklist.
+        Decode and verify a JWT, checking the Redis blacklist for JTI and Family ID.
 
         Returns:
             User if the token is valid and not blacklisted, else ``None``.
@@ -347,6 +363,12 @@ class AuthFacade:
             jti = payload.get("jti")
             if jti and await self.token_blacklist.is_blacklisted(jti):
                 logger.info("token_blacklisted", jti=jti)
+                return None
+
+            # Reject blacklisted session families (instant remote revocation)
+            fam = payload.get("fam")
+            if fam and await self.token_blacklist.is_blacklisted(f"fam:{fam}"):
+                logger.info("session_family_blacklisted", family_id=fam)
                 return None
 
             user_id = payload.get("sub")
@@ -411,7 +433,7 @@ class AuthFacade:
     async def logout(
         self, token: Optional[str] = None, raw_refresh_token: Optional[str] = None
     ) -> None:
-        """Blacklist the access token JWT and revoke the refresh token in MongoDB.
+        """Blacklist the access token JWT and revoke the refresh token session family in MongoDB.
 
         Best-effort: if either token is expired or invalid we still succeed.
         """
@@ -420,22 +442,27 @@ class AuthFacade:
                 payload = self.jwt_service.decode_token(token)
                 jti = payload.get("jti")
                 exp = payload.get("exp")
+                family_id = payload.get("fam")
+
                 if jti and exp:
                     now = datetime.now(timezone.utc)
                     expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
                     ttl = max(int((expires_at - now).total_seconds()), 0)
                     await self.token_blacklist.blacklist(jti, ttl)
-            except Exception:
-                logger.warning("logout_token_blacklist_failed")
+
+                if family_id:
+                    await self.repository.revoke_token_family(family_id)
+            except Exception as e:
+                logger.warning("logout_token_blacklist_failed", error=str(e))
 
         if raw_refresh_token:
             try:
                 token_hash = self._hash_token(raw_refresh_token)
                 token_doc = await self.repository.find_refresh_token_by_hash(token_hash)
                 if token_doc:
-                    await self.repository.revoke_refresh_token(token_doc.id)
-            except Exception:
-                logger.warning("logout_refresh_token_revoke_failed")
+                    await self.repository.revoke_token_family(token_doc.family_id)
+            except Exception as e:
+                logger.warning("logout_refresh_token_revoke_failed", error=str(e))
 
     async def update_preferences(self, user_id: str, preferences: dict) -> User:
         """

@@ -113,9 +113,12 @@ In `frontend/src/utils/api.ts`, if multiple asynchronous requests receive `401 U
 
 Users can view and manage their active login sessions across devices from **Settings -> Active Devices & Sessions**:
 
-- **Metadata Tracking**: Captures browser and OS details (parsed from `User-Agent`), IP address, and `last_used_at` timestamp.
+- **Metadata Tracking**: Captures browser and OS details (parsed from `User-Agent`), IP address, and formatted `last_used_at` timestamp with date and time.
+- **Instant Remote Ejection (0-Second Revocation)**:
+  - Revoking a session family adds `fam:<family_id>` to the Redis blacklist with a 15-minute TTL (matching max access token lifespan).
+  - Every authenticated request decodes the `fam` claim from the access JWT; blacklisted families are rejected immediately with `401 Unauthorized`.
 - **Endpoints**:
-  - `GET /api/v0/auth/sessions`: List active device session families, flagging `is_current`.
-  - `DELETE /api/v0/auth/sessions/{family_id}`: Remotely revoke a specific session family.
+  - `GET /api/v0/auth/sessions`: List active device session families, accurately identifying `is_current` via access token `fam` claim.
+  - `DELETE /api/v0/auth/sessions/{family_id}`: Remotely revoke a specific session family with instant 0-second ejection.
   - `POST /api/v0/auth/sessions/revoke-others`: Revoke all active sessions except the user's current session.
-- **UI Component**: [ActiveSessionsCard.tsx](file:///home/ali/Projects/my-projects/inner-pages/my-inner-pages/frontend/src/components/settings/ActiveSessionsCard.tsx) renders device icons, current device badge, and single-click revocation buttons.
+- **UI Component**: [ActiveSessionsCard.tsx](file:///home/ali/Projects/my-projects/inner-pages/my-inner-pages/frontend/src/components/settings/ActiveSessionsCard.tsx) renders device icons, current device badge (`This Device • Active Now`), exact timestamp formatting, and single-click remote revocation controls.

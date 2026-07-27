@@ -80,6 +80,12 @@ async def test_revoke_specific_session(
     )
     assert revoke_res.status_code == 200
 
+    # Verify Client A's access token is instantly rejected (instant ejection)
+    client.cookies.clear()
+    client.cookies.set("access_token", access_a)
+    verify_a_res = await client.get("/api/v0/auth/verify")
+    assert verify_a_res.status_code == 401
+
     # Verify Client A can no longer refresh
     refresh_a_res = await client.post(
         "/api/v0/auth/refresh",
@@ -130,3 +136,50 @@ async def test_revoke_all_other_sessions(
         headers={"Cookie": f"refresh_token={refresh_b}"},
     )
     assert ref_b_res.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_session_family(
+    client: AsyncClient, test_user: dict
+):
+    """Verify logging out revokes the session family so logging back in leaves only 1 active session."""
+    user = await User.find_one({"email": test_user["email"]})
+    assert user is not None
+    await RefreshToken.find({"user_id": user.id}).update({"$set": {"is_revoked": True}})
+
+    client.cookies.clear()
+
+    # Initial Login
+    res1 = await client.post(
+        "/api/v0/auth/login",
+        json={"email": test_user["email"], "password": test_user["password"]},
+    )
+    assert res1.status_code == 200
+    acc1 = res1.cookies.get("access_token")
+
+    # Logout
+    logout_res = await client.post(
+        "/api/v0/auth/logout",
+        headers={"Cookie": f"access_token={acc1}"},
+    )
+    assert logout_res.status_code == 200
+
+    # Login again
+    res2 = await client.post(
+        "/api/v0/auth/login",
+        json={"email": test_user["email"], "password": test_user["password"]},
+    )
+    assert res2.status_code == 200
+    acc2 = res2.cookies.get("access_token")
+
+    # Fetch active sessions
+    sessions_res = await client.get(
+        "/api/v0/auth/sessions",
+        headers={"Cookie": f"access_token={acc2}"},
+    )
+    assert sessions_res.status_code == 200
+    data = sessions_res.json()
+
+    # Old session should be revoked, leaving only the 1 current session
+    assert data["total_count"] == 1
+    assert data["sessions"][0]["is_current"] is True

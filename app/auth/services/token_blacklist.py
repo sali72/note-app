@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -8,14 +9,14 @@ logger = get_logger(__name__)
 
 
 class TokenBlacklistService:
-    """Redis-backed JWT blacklist for immediate logout invalidation.
+    """Redis-backed JWT blacklist for immediate logout & session revocation.
 
     Graceful degradation:
-    * If ``redis_url`` is ``None`` all operations are no-ops (safe for local
-      dev without Redis).
-    * Connection failures disable the blacklist for the lifetime of this
-      instance and log a warning.
+    * If Redis is unavailable or unconfigured, falls back to in-memory TTL storage
+      so blacklisting and instant revocation work reliably in dev & test environments.
     """
+
+    _memory_storage: dict[str, float] = {}
 
     def __init__(self, redis_url: Optional[str]):
         self._redis: Optional[aioredis.Redis] = None
@@ -48,25 +49,34 @@ class TokenBlacklistService:
     # ------------------------------------------------------------------
 
     async def blacklist(self, jti: str, ttl_seconds: int) -> None:
-        """Add a JWT ID to the blacklist with the given TTL."""
+        """Add a JWT ID or family_id to the blacklist with the given TTL."""
         r = await self._get_redis()
         if r is None:
+            self._memory_storage[jti] = datetime.now(timezone.utc).timestamp() + ttl_seconds
             return
         try:
             await r.setex(f"jwt:blacklist:{jti}", ttl_seconds, "1")
         except Exception as exc:
             logger.warning("blacklist_set_failed", jti=jti, error=str(exc))
+            self._memory_storage[jti] = datetime.now(timezone.utc).timestamp() + ttl_seconds
 
     async def is_blacklisted(self, jti: str) -> bool:
-        """Return ``True`` if the JWT ID is currently blacklisted."""
+        """Return ``True`` if the JWT ID or family_id is currently blacklisted."""
         r = await self._get_redis()
         if r is None:
-            return False
+            exp = self._memory_storage.get(jti)
+            if not exp:
+                return False
+            if datetime.now(timezone.utc).timestamp() > exp:
+                del self._memory_storage[jti]
+                return False
+            return True
         try:
             return bool(await r.exists(f"jwt:blacklist:{jti}"))
         except Exception as exc:
             logger.warning("blacklist_check_failed", jti=jti, error=str(exc))
-            return False
+            exp = self._memory_storage.get(jti)
+            return bool(exp and datetime.now(timezone.utc).timestamp() <= exp)
 
     async def close(self) -> None:
         if self._redis is not None:

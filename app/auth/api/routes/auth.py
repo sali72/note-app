@@ -175,9 +175,9 @@ async def get_active_sessions(
     facade: AuthFacade = Depends(get_auth_facade),
 ) -> SessionListResponse:
     """Get all active device session families for current user."""
-    raw_refresh_token = request.cookies.get("refresh_token")
+    access_token = request.cookies.get("access_token")
     sessions = await facade.get_user_sessions(
-        user=current_user, current_raw_refresh_token=raw_refresh_token
+        user=current_user, current_access_token=access_token
     )
     return SessionListResponse(sessions=sessions, total_count=len(sessions))
 
@@ -208,10 +208,10 @@ async def revoke_other_sessions(
     facade: AuthFacade = Depends(get_auth_facade),
 ) -> MessageResponse:
     """Revoke all other device session families except the current requesting family."""
-    raw_refresh_token = request.cookies.get("refresh_token")
+    access_token = request.cookies.get("access_token")
     try:
         count = await facade.revoke_other_sessions(
-            user=current_user, current_raw_refresh_token=raw_refresh_token
+            user=current_user, current_access_token=access_token
         )
         return MessageResponse(message=f"Revoked {count} other session(s)")
     except ValueError as e:
