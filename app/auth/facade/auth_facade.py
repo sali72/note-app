@@ -10,7 +10,15 @@ from app.auth.api.schemas.session import SessionResponse
 from app.auth.config import AuthModuleConfig
 from app.auth.db.models import User
 from app.auth.db.repository import UserRepository
+from app.auth.exceptions import (
+    InvalidCredentialsError,
+    InvalidTokenError,
+    SessionNotFoundError,
+    TokenRevokedError,
+    UserAlreadyExistsError,
+)
 from app.auth.services.token_blacklist import TokenBlacklistService
+from app.auth.services.user_agent_service import parse_user_agent
 from app.core.exceptions import DuplicateDocumentException, RepositoryException
 from app.core.logging import get_logger
 from app.core.services.email_service import EmailService
@@ -18,45 +26,6 @@ from app.core.services.jwt_service import JWTService
 from app.core.services.password_service import PasswordService
 
 logger = get_logger(__name__)
-
-
-def parse_user_agent(ua_string: Optional[str]) -> tuple[str, str, str]:
-    """Parse User-Agent string into (device_name, browser, os)."""
-    if not ua_string:
-        return "Unknown Device", "Unknown Browser", "Unknown OS"
-
-    ua = ua_string.lower()
-
-    # OS detection
-    if "macintosh" in ua or "mac os" in ua:
-        os_name = "macOS"
-    elif "iphone" in ua or "ipad" in ua:
-        os_name = "iOS"
-    elif "android" in ua:
-        os_name = "Android"
-    elif "windows" in ua:
-        os_name = "Windows"
-    elif "linux" in ua:
-        os_name = "Linux"
-    else:
-        os_name = "Unknown OS"
-
-    # Browser detection
-    if "edg/" in ua or "edge" in ua:
-        browser_name = "Edge"
-    elif "chrome" in ua and "safari" in ua and "edg" not in ua:
-        browser_name = "Chrome"
-    elif "firefox" in ua:
-        browser_name = "Firefox"
-    elif "safari" in ua and "chrome" not in ua:
-        browser_name = "Safari"
-    elif "opera" in ua or "opr/" in ua:
-        browser_name = "Opera"
-    else:
-        browser_name = "Browser"
-
-    device_name = f"{browser_name} on {os_name}"
-    return device_name, browser_name, os_name
 
 
 class AuthFacade:
@@ -100,7 +69,7 @@ class AuthFacade:
         try:
             # Check if email already exists
             if await self.repository.email_exists(email):
-                raise ValueError("An account with this email already exists")
+                raise UserAlreadyExistsError("An account with this email already exists")
 
             # Hash password
             hashed_password = self.password_service.hash_password(password)
@@ -124,7 +93,7 @@ class AuthFacade:
         except DuplicateDocumentException:
             # Race condition: email was created between check and insert
             logger.warning("user_registration_race_condition", email=email)
-            raise ValueError("An account with this email already exists")
+            raise UserAlreadyExistsError("An account with this email already exists")
         except RepositoryException:
             logger.error("user_registration_failed", email=email)
             raise
@@ -154,15 +123,17 @@ class AuthFacade:
         user_agent: Optional[str] = None,
         ip_address: Optional[str] = None,
     ) -> tuple[str, str]:
-        """Generate access_token (JWT) and persistent rotating refresh_token in MongoDB.
+        """Create a fresh access + refresh token pair for a user session.
 
-        Returns:
-            (access_token, raw_refresh_token)
+        If `family_id` is provided, the refresh token continues the family chain (RTR).
+        Otherwise, a new family UUID is generated (new login session).
         """
         token_family = family_id or str(uuid.uuid4())
         access_token = self._generate_token(user, family_id=token_family)
+
         raw_refresh_token = secrets.token_urlsafe(64)
         token_hash = self._hash_token(raw_refresh_token)
+
         expires_at = datetime.now(timezone.utc) + timedelta(
             days=self.config.refresh_token_expire_days
         )
@@ -189,23 +160,23 @@ class AuthFacade:
         """
         user = await self.repository.find_by_email(email)
         if not user:
-            raise ValueError("Invalid email or password")
+            raise InvalidCredentialsError("Invalid email or password")
 
         # Google-only accounts have no password — redirect the user
         if user.hashed_password is None:
-            raise ValueError(
+            raise InvalidCredentialsError(
                 "This account uses Google Sign-In. "
                 "Please sign in with Google."
             )
 
         if not self.password_service.verify_password(password, user.hashed_password):
-            raise ValueError("Invalid email or password")
+            raise InvalidCredentialsError("Invalid email or password")
 
         if not user.is_active:
-            raise ValueError("Account is deactivated")
+            raise InvalidCredentialsError("Account is deactivated")
 
         if self.config.email_verification_required and not user.is_verified:
-            raise ValueError("Please verify your email before logging in")
+            raise InvalidCredentialsError("Please verify your email before logging in")
 
         await self.repository.update_last_login(user.id)
         access_token, refresh_token = await self.create_session_tokens(
@@ -228,12 +199,12 @@ class AuthFacade:
         token_doc = await self.repository.find_refresh_token_by_hash(token_hash)
 
         if not token_doc:
-            raise ValueError("Invalid refresh token")
+            raise InvalidTokenError("Invalid refresh token")
 
         now = datetime.now(timezone.utc)
         exp = token_doc.expires_at.replace(tzinfo=timezone.utc) if token_doc.expires_at.tzinfo is None else token_doc.expires_at
         if exp < now:
-            raise ValueError("Refresh token expired")
+            raise InvalidTokenError("Refresh token expired")
 
         if token_doc.is_revoked:
             # REUSE ATTACK DETECTED!
@@ -244,7 +215,7 @@ class AuthFacade:
                 family_id=token_doc.family_id,
                 user_id=str(token_doc.user_id),
             )
-            raise ValueError("Revoked refresh token reuse detected")
+            raise TokenRevokedError("Revoked refresh token reuse detected")
 
         # Revoke the used refresh token
         await self.repository.revoke_refresh_token(token_doc.id)
@@ -252,7 +223,7 @@ class AuthFacade:
         # Get user
         user = await self.get_user_by_id(str(token_doc.user_id))
         if not user or not user.is_active:
-            raise ValueError("User account is inactive or not found")
+            raise InvalidCredentialsError("User account is inactive or not found")
 
         # Use updated user_agent and ip_address if provided, else fallback to token_doc values
         ua = user_agent if user_agent else token_doc.user_agent
