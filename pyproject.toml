@@ -1,6 +1,6 @@
 [project]
 name = "my-inner-pages"
-version = "0.1.0"
+version = "0.4.0-alpha"
 description = "AI-boosted Journaling API"
 authors = [
     {name = "Seyed Ali Hashemi", email = "sahashemi072@gmail.com"}
