@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 
 
@@ -10,8 +10,8 @@ class MirrorReflectionResponse(BaseModel):
     available_modes: list[str] = Field(..., description="Available reflection modes")
     error: Optional[str] = Field(None, description="Error message if generation failed")
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "reflection": "Your recent entries show a beautiful journey toward self-acceptance...",
                 "mode": "emotional",
@@ -19,3 +19,4 @@ class MirrorReflectionResponse(BaseModel):
                 "error": None
             }
         }
+    )

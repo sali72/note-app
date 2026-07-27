@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from typing import Optional
-from beanie import Document, Indexed, PydanticObjectId
-from pydantic import BaseModel, Field, EmailStr
+from beanie import Document, PydanticObjectId
+from pymongo import IndexModel
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class UserPreferences(BaseModel):
@@ -38,7 +39,7 @@ class RefreshToken(Document):
 class User(Document):
     """User document model for MongoDB."""
     
-    email: EmailStr = Field(..., unique=True, max_length=255)
+    email: EmailStr = Field(..., max_length=255)
     hashed_password: Optional[str] = Field(default=None)
     google_id: Optional[str] = Field(default=None)
     
@@ -66,20 +67,20 @@ class User(Document):
     class Settings:
         name = "users"
         indexes = [
-            "email",
+            IndexModel([("email", 1)], unique=True),
             "created_at",
             "verification_token",
-            [("email", 1)],
         ]
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "email": "user@example.com",
                 "is_active": True,
                 "is_verified": False
             }
         }
+    )
     
     def update_last_login(self) -> None:
         """Update the last login timestamp."""

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 from beanie import Document
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatMessage(BaseModel):
@@ -28,8 +28,8 @@ class Chat(Document):
             [("user_id", 1), ("created_at", -1)],
         ]
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_id": "507f1f77bcf86cd799439011",
                 "title": "Discussion about work stress",
@@ -42,3 +42,4 @@ class Chat(Document):
                 "updated_at": "2024-01-15T10:30:05Z",
             }
         }
+    )

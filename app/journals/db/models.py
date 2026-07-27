@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import re
 from beanie import Document
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 
 class Journal(Document):
@@ -45,8 +45,8 @@ class Journal(Document):
             [("user_id", 1), ("tags", 1)],
         ]
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_id": "507f1f77bcf86cd799439011",
                 "title": "My First Journal Entry",
@@ -54,3 +54,4 @@ class Journal(Document):
                 "tags": ["personal", "reflection"]
             }
         }
+    )

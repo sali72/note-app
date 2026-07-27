@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 from beanie import Document
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 
 class Tag(Document):
@@ -18,8 +18,8 @@ class Tag(Document):
             [("user_id", 1), ("name", "text")],
         ]
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_id": "507f1f77bcf86cd799439011",
                 "name": "personal",
@@ -27,3 +27,4 @@ class Tag(Document):
                 "created_at": "2024-01-15T10:30:00Z",
             }
         }
+    )

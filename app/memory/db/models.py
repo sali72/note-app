@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 from beanie import Document
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserModelStats(BaseModel):
@@ -37,8 +37,8 @@ class UserModel(Document):
         name = "user_models"
         indexes = ["user_id"]
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_id": "507f1f77bcf86cd799439011",
                 "version": 1,
@@ -54,3 +54,4 @@ class UserModel(Document):
                 "conversationGuidelines": []
             }
         }
+    )
