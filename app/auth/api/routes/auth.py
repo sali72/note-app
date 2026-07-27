@@ -81,12 +81,13 @@ async def login(
     The response body still contains the token for API clients.
     """
     try:
-        access_token, user = await facade.login(
+        access_token, refresh_token, user = await facade.login(
             email=login_request.email,
             password=login_request.password
         )
         
         cookie_service.set_auth_cookie(response, access_token)
+        cookie_service.set_refresh_cookie(response, refresh_token)
         cookie_service.set_session_cookie(response)
         return LoginResponse(
             access_token=access_token,
@@ -94,6 +95,48 @@ async def login(
             user=UserResponse.from_document(user)
         )
     except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+        )
+
+
+@router.post(
+    "/refresh",
+    response_model=LoginResponse,
+    summary="Refresh access token using HTTP-only refresh token cookie",
+)
+async def refresh(
+    request: Request,
+    response: Response,
+    facade: AuthFacade = Depends(get_auth_facade),
+    cookie_service: CookieService = Depends(get_cookie_service),
+) -> LoginResponse:
+    """
+    Issue a new short-lived access token and rotated refresh token using the refresh_token cookie.
+    """
+    raw_refresh_token = request.cookies.get("refresh_token")
+    if not raw_refresh_token:
+        cookie_service.clear_all_cookies(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token missing",
+        )
+
+    try:
+        new_access_token, new_refresh_token, user = await facade.refresh_access_token(
+            raw_refresh_token
+        )
+        cookie_service.set_auth_cookie(response, new_access_token)
+        cookie_service.set_refresh_cookie(response, new_refresh_token)
+        cookie_service.set_session_cookie(response)
+        return LoginResponse(
+            access_token=new_access_token,
+            token_type="bearer",
+            user=UserResponse.from_document(user),
+        )
+    except ValueError as e:
+        cookie_service.clear_all_cookies(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
@@ -207,14 +250,13 @@ async def logout(
     response: Response = None,
 ) -> MessageResponse:
     """
-    Logout the current user by blacklisting their JWT and clearing cookies.
+    Logout the current user by blacklisting their access token, revoking their refresh token, and clearing cookies.
     """
-    token = request.cookies.get("access_token")
-    if token:
-        await facade.logout(token)
+    access_token = request.cookies.get("access_token")
+    refresh_token = request.cookies.get("refresh_token")
+    await facade.logout(token=access_token, raw_refresh_token=refresh_token)
 
-    cookie_service.clear_auth_cookie(response)
-    cookie_service.clear_session_cookie(response)
+    cookie_service.clear_all_cookies(response)
     return MessageResponse(message="Logged out successfully")
 
 

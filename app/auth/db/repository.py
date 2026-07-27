@@ -5,7 +5,7 @@ from beanie import PydanticObjectId
 from beanie.odm.queries.update import UpdateResponse
 from pymongo.errors import PyMongoError, DuplicateKeyError
 
-from app.auth.db.models import User
+from app.auth.db.models import User, RefreshToken
 from app.core.exceptions import RepositoryException, DuplicateDocumentException
 from app.core.logging import get_logger
 
@@ -246,3 +246,56 @@ class UserRepository:
             }},
             response_type=UpdateResponse.NEW_DOCUMENT,
         )
+
+    # ------------------------------------------------------------------
+    # Refresh Token persistence & rotation methods
+    # ------------------------------------------------------------------
+
+    async def create_refresh_token(
+        self,
+        user_id: PydanticObjectId,
+        token_hash: str,
+        family_id: str,
+        expires_at: datetime,
+    ) -> RefreshToken:
+        refresh_doc = RefreshToken(
+            user_id=user_id,
+            token_hash=token_hash,
+            family_id=family_id,
+            expires_at=expires_at,
+        )
+        await refresh_doc.insert()
+        return refresh_doc
+
+    async def find_refresh_token_by_hash(
+        self,
+        token_hash: str,
+    ) -> Optional[RefreshToken]:
+        return await RefreshToken.find_one({"token_hash": token_hash})
+
+    async def revoke_refresh_token(
+        self,
+        token_id: PydanticObjectId,
+    ) -> None:
+        token_doc = await RefreshToken.get(token_id)
+        if token_doc:
+            token_doc.is_revoked = True
+            await token_doc.save()
+
+    async def revoke_token_family(
+        self,
+        family_id: str,
+    ) -> int:
+        result = await RefreshToken.find({"family_id": family_id}).update(
+            {"$set": {"is_revoked": True}}
+        )
+        return getattr(result, "modified_count", 0)
+
+    async def revoke_all_user_tokens(
+        self,
+        user_id: PydanticObjectId,
+    ) -> int:
+        result = await RefreshToken.find({"user_id": user_id}).update(
+            {"$set": {"is_revoked": True}}
+        )
+        return getattr(result, "modified_count", 0)

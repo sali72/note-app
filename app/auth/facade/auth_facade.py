@@ -1,3 +1,5 @@
+import hashlib
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -87,9 +89,37 @@ class AuthFacade:
             logger.error("user_registration_failed", email=email)
             raise
 
-    async def login(self, email: str, password: str) -> tuple[str, User]:
+    def _hash_token(self, token: str) -> str:
+        """Compute SHA256 hex digest of a raw refresh token."""
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    async def create_session_tokens(
+        self, user: User, family_id: Optional[str] = None
+    ) -> tuple[str, str]:
+        """Generate access_token (JWT) and persistent rotating refresh_token in MongoDB.
+
+        Returns:
+            (access_token, raw_refresh_token)
         """
-        Authenticate user with email + password and return a JWT.
+        access_token = self._generate_token(user)
+        raw_refresh_token = secrets.token_urlsafe(64)
+        token_hash = self._hash_token(raw_refresh_token)
+        token_family = family_id or str(uuid.uuid4())
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=self.config.refresh_token_expire_days
+        )
+
+        await self.repository.create_refresh_token(
+            user_id=user.id,
+            token_hash=token_hash,
+            family_id=token_family,
+            expires_at=expires_at,
+        )
+        return access_token, raw_refresh_token
+
+    async def login(self, email: str, password: str) -> tuple[str, str, User]:
+        """
+        Authenticate user with email + password and return (access_token, refresh_token, user).
 
         Raises:
             ValueError: If credentials are invalid or the account is
@@ -116,8 +146,52 @@ class AuthFacade:
             raise ValueError("Please verify your email before logging in")
 
         await self.repository.update_last_login(user.id)
-        access_token = self._generate_token(user)
-        return access_token, user
+        access_token, refresh_token = await self.create_session_tokens(user)
+        return access_token, refresh_token, user
+
+    async def refresh_access_token(
+        self, raw_refresh_token: str
+    ) -> tuple[str, str, User]:
+        """Validate an incoming refresh token, rotate it, and return new access + refresh tokens.
+
+        Implements Refresh Token Rotation (RTR) and Reuse Detection:
+        If a revoked token is reused, all active tokens in its family are immediately revoked!
+        """
+        token_hash = self._hash_token(raw_refresh_token)
+        token_doc = await self.repository.find_refresh_token_by_hash(token_hash)
+
+        if not token_doc:
+            raise ValueError("Invalid refresh token")
+
+        now = datetime.now(timezone.utc)
+        exp = token_doc.expires_at.replace(tzinfo=timezone.utc) if token_doc.expires_at.tzinfo is None else token_doc.expires_at
+        if exp < now:
+            raise ValueError("Refresh token expired")
+
+        if token_doc.is_revoked:
+            # REUSE ATTACK DETECTED!
+            # Revoke all tokens in this family to protect the user
+            await self.repository.revoke_token_family(token_doc.family_id)
+            logger.warning(
+                "refresh_token_reuse_detected",
+                family_id=token_doc.family_id,
+                user_id=str(token_doc.user_id),
+            )
+            raise ValueError("Revoked refresh token reuse detected")
+
+        # Revoke the used refresh token
+        await self.repository.revoke_refresh_token(token_doc.id)
+
+        # Get user
+        user = await self.get_user_by_id(str(token_doc.user_id))
+        if not user or not user.is_active:
+            raise ValueError("User account is inactive or not found")
+
+        # Issue new token pair preserving the same family_id
+        new_access_token, new_refresh_token = await self.create_session_tokens(
+            user=user, family_id=token_doc.family_id
+        )
+        return new_access_token, new_refresh_token, user
 
     async def get_user_by_id(self, user_id: str) -> Optional[User]:
         """
@@ -224,23 +298,34 @@ class AuthFacade:
         )
         return user
 
-    async def logout(self, token: str) -> None:
-        """Blacklist the JWT so it cannot be used again.
+    async def logout(
+        self, token: Optional[str] = None, raw_refresh_token: Optional[str] = None
+    ) -> None:
+        """Blacklist the access token JWT and revoke the refresh token in MongoDB.
 
-        Best-effort: if the token is already expired or invalid we still
-        succeed — the caller should clear the cookie regardless.
+        Best-effort: if either token is expired or invalid we still succeed.
         """
-        try:
-            payload = self.jwt_service.decode_token(token)
-            jti = payload.get("jti")
-            exp = payload.get("exp")
-            if jti and exp:
-                now = datetime.now(timezone.utc)
-                expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
-                ttl = max(int((expires_at - now).total_seconds()), 0)
-                await self.token_blacklist.blacklist(jti, ttl)
-        except Exception:
-            logger.warning("logout_token_blacklist_failed")
+        if token:
+            try:
+                payload = self.jwt_service.decode_token(token)
+                jti = payload.get("jti")
+                exp = payload.get("exp")
+                if jti and exp:
+                    now = datetime.now(timezone.utc)
+                    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+                    ttl = max(int((expires_at - now).total_seconds()), 0)
+                    await self.token_blacklist.blacklist(jti, ttl)
+            except Exception:
+                logger.warning("logout_token_blacklist_failed")
+
+        if raw_refresh_token:
+            try:
+                token_hash = self._hash_token(raw_refresh_token)
+                token_doc = await self.repository.find_refresh_token_by_hash(token_hash)
+                if token_doc:
+                    await self.repository.revoke_refresh_token(token_doc.id)
+            except Exception:
+                logger.warning("logout_refresh_token_revoke_failed")
 
     async def update_preferences(self, user_id: str, preferences: dict) -> User:
         """

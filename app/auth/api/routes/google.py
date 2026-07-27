@@ -88,12 +88,13 @@ async def google_callback(
             email=google_user.email,
         )
 
-        # 5 – Issue JWT
-        access_token = facade._generate_token(user)
+        # 5 – Issue access and refresh tokens
+        access_token, refresh_token = await facade.create_session_tokens(user)
 
-        # 6 – Set cookie + redirect
+        # 6 – Set cookies + redirect
         redirect = RedirectResponse(url=settings.frontend_url)
         cookie_service.set_auth_cookie(redirect, access_token)
+        cookie_service.set_refresh_cookie(redirect, refresh_token)
         cookie_service.set_session_cookie(redirect)
         return redirect
 

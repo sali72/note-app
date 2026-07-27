@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from typing import Optional
-from beanie import Document, Indexed
+from beanie import Document, Indexed, PydanticObjectId
 from pydantic import BaseModel, Field, EmailStr
 
 
@@ -10,6 +10,26 @@ class UserPreferences(BaseModel):
     accent: str = "amber"
     fontStyle: str = "serif"
     fontSize: str = "medium"
+
+
+class RefreshToken(Document):
+    """RefreshToken document model for persistent session storage and rotation."""
+    
+    user_id: PydanticObjectId = Field(...)
+    token_hash: str = Field(...)
+    family_id: str = Field(...)  # Token family identifier for reuse detection
+    is_revoked: bool = Field(default=False)
+    expires_at: datetime = Field(...)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Settings:
+        name = "refresh_tokens"
+        indexes = [
+            "token_hash",
+            "user_id",
+            "family_id",
+            [("expires_at", 1)],  # TTL index: auto-deletes expired records from MongoDB
+        ]
 
 
 class User(Document):

@@ -12,7 +12,8 @@ class AuthModuleConfig(BaseSettings):
     
     # JWT settings
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24  # 24 hours
+    access_token_expire_minutes: int = 15  # 15 minutes (short-lived access token)
+    refresh_token_expire_days: int = 30    # 30 days (long-lived refresh token)
     
     # Password settings
     min_password_length: int = 8

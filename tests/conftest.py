@@ -18,11 +18,12 @@ from app.core.config import Settings
 from app.core.deps.settings import get_settings
 from app.auth.api.config import AuthRoutes
 from tests.config import AUTH_PREFIX
-from app.auth.db.models import User
+from app.auth.db.models import User, RefreshToken
 from app.journals.db.models import Journal
 from app.journals.db.tag_model import Tag
 from app.memory.db.models import UserModel
 from app.chat.db.models import Chat
+from app.feedback.db.models import Feedback
 
 
 @pytest.fixture(scope="session")
@@ -94,7 +95,7 @@ async def test_db_client(test_settings: Settings) -> AsyncGenerator[AsyncIOMotor
     # Initialize Beanie with test database
     await init_beanie(
         database=client[test_settings.database_name],
-        document_models=[User, Journal, Tag, UserModel, Chat, LLMProvider]
+        document_models=[User, RefreshToken, Journal, Tag, UserModel, Chat, LLMProvider, Feedback]
     )
     
     # Mark that Beanie is initialized to prevent re-initialization
@@ -196,23 +197,20 @@ async def test_user(client: AsyncClient) -> dict:
         "email": user_data["email"],
         "password": user_data["password"],
         "user_id": login_data["user"]["id"],
-        "access_token": login_data["access_token"]
+        "access_token": login_data["access_token"],
+        "refresh_token": login_response.cookies.get("refresh_token"),
     }
 
 
 @pytest_asyncio.fixture
 async def authenticated_client(client: AsyncClient, test_user: dict) -> AsyncClient:
     """
-    Create an authenticated HTTP client with the ``access_token`` cookie.
-    
-    Args:
-        client: HTTP client fixture
-        test_user: Test user fixture with access token
-        
-    Returns:
-        HTTP client with the auth cookie set
+    Create an authenticated HTTP client with access_token and refresh_token cookies.
     """
-    client.cookies.set("access_token", test_user["access_token"])
+    if test_user.get("access_token"):
+        client.cookies.set("access_token", test_user["access_token"])
+    if test_user.get("refresh_token"):
+        client.cookies.set("refresh_token", test_user["refresh_token"])
     return client
 
 
