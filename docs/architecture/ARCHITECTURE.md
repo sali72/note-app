@@ -123,12 +123,20 @@ Application Startup
 ### Auth Module
 ```
 app/auth/
+├── exceptions.py               # Custom domain exceptions (AuthException hierarchy)
 ├── api/routes/auth.py          # Routes (uses Depends)
-├── facade/auth_facade.py       # Business logic
+├── facade/auth_facade.py       # Orchestration façade (delegates to sub-services)
 ├── db/
-│   ├── models.py               # User model
-│   └── repository.py           # Data access
-├── config.py                   # Module config
+│   ├── models.py               # User & RefreshToken Beanie documents
+│   ├── repository.py           # UserRepository — user account persistence
+│   └── session_repository.py  # SessionRepository — refresh token lifecycle
+├── services/
+│   ├── cookie_service.py       # HttpOnly cookie get/set/clear
+│   ├── token_blacklist.py      # Redis (+ in-memory fallback) family blacklist
+│   ├── token_service.py        # JWT generation & SHA-256 token hashing
+│   ├── session_service.py      # Full session lifecycle (RTR, revocation, listing)
+│   └── user_agent_service.py  # User-Agent string → device/browser/OS parsing
+├── config.py                   # Module config (token TTLs, email verification flag)
 └── deps.py                     # Dependency providers ⭐
 ```
 
@@ -193,7 +201,9 @@ FastAPI Route
     │   │   │   │
     │   │   │   └─ Depends(get_settings) ← Cached
     │   │   │
-    │   │   └─ Depends(get_user_repository)
+    │   │   ├─ Depends(get_user_repository)    ← User account ops
+    │   │   │
+    │   │   └─ Depends(get_token_blacklist)    ← Redis blacklist
     │   │
     │   ├─ Verify token
     │   ├─ Load user from DB

@@ -17,7 +17,8 @@ Python 3.11+ FastAPI server with MongoDB/Beanie, LangChain AI, JWT auth.
 ## Architecture
 - **Domain modules:** `auth/`, `journals/`, `chat/`, `ai/`, `memory/`
 - **Shared infra:** `core/` (config, logging, middleware, rate-limit, cache, deps)
-- **Layer pattern per module:** `api/routes/` → `facade/` or `service/` → `db/repository.py`
+- **Layer pattern per module:** `api/routes/` → `facade/` → `services/` → `db/repository.py`
+- **Auth module sub-services:** `TokenService` (JWT + hashing), `SessionService` (session lifecycle + RTR + Redis blacklisting), `SessionRepository` (RefreshToken persistence), `UserAgentService` (UA parsing), `CookieService`, `TokenBlacklistService`
 - **DI:** Routes use `Depends(get_*)` — never instantiate services directly
 - **Route prefix:** `/api/v0` set in `main.py`
 
@@ -46,7 +47,7 @@ Python 3.11+ FastAPI server with MongoDB/Beanie, LangChain AI, JWT auth.
 - **Docstrings:** Google-style with Args/Returns/Raises
 - **Logging:** `structlog.get_logger(__name__)`, key-value pairs
 - **Responses:** Pydantic schemas with `from_document()` classmethod
-- **Errors:** facades raise `ValueError`; routes catch → `HTTPException`
+- **Errors:** auth facades raise typed domain exceptions (`InvalidCredentialsError`, `TokenRevokedError`, etc. from `app/auth/exceptions.py`); all inherit from `ValueError` for backward compatibility. Other facades still raise `ValueError`. Routes catch both → `HTTPException`.
 - **Imports:** stdlib → third-party → local (absolute from `app.`)
 - **Email service:** `EmailService` is injected via DI (like `JWTService`) — configured in `core/deps/services.py`, used through `AuthFacade`
 - **Testing:** async tests (`@pytest.mark.asyncio`), fresh test DB per test, mock LLM enforced

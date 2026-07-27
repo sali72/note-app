@@ -122,3 +122,28 @@ Users can view and manage their active login sessions across devices from **Sett
   - `DELETE /api/v0/auth/sessions/{family_id}`: Remotely revoke a specific session family with instant 0-second ejection.
   - `POST /api/v0/auth/sessions/revoke-others`: Revoke all active sessions except the user's current session.
 - **UI Component**: [ActiveSessionsCard.tsx](file:///home/ali/Projects/my-projects/inner-pages/my-inner-pages/frontend/src/components/settings/ActiveSessionsCard.tsx) renders device icons, current device badge (`This Device • Active Now`), exact timestamp formatting, and single-click remote revocation controls.
+
+---
+
+## 🏛️ Internal Module Architecture
+
+`AuthFacade` is a pure orchestration façade; domain logic is delegated to focused sub-services:
+
+| Service | File | Responsibility |
+|---|---|---|
+| `TokenService` | `services/token_service.py` | JWT access token generation, SHA-256 token hashing |
+| `SessionService` | `services/session_service.py` | Session lifecycle: creation, listing, RTR rotation, Redis blacklisting |
+| `SessionRepository` | `db/session_repository.py` | MongoDB `RefreshToken` CRUD (decoupled from `UserRepository`) |
+| `UserAgentService` | `services/user_agent_service.py` | User-Agent string → device / browser / OS parsing |
+| `CookieService` | `services/cookie_service.py` | HttpOnly cookie set / clear |
+| `TokenBlacklistService` | `services/token_blacklist.py` | Redis family blacklist with in-memory fallback |
+
+Custom domain exceptions (`app/auth/exceptions.py`) replace generic `ValueError` for typed error handling:
+- `InvalidCredentialsError` — bad email/password, deactivated account, unverified email
+- `TokenRevokedError` — revoked token reuse detected
+- `InvalidTokenError` — malformed or expired token
+- `UserAlreadyExistsError` — duplicate registration attempt
+- `SessionNotFoundError` — missing session family ID
+
+All exception classes inherit from both `AuthException` and `ValueError` for full backward compatibility with route-layer `except ValueError` handlers.
+
