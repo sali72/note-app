@@ -106,3 +106,16 @@ In `frontend/src/utils/api.ts`, if multiple asynchronous requests receive `401 U
 2. Concurrent requests are queued into `refreshSubscribers`.
 3. Upon successful refresh, all subscriber requests resume in parallel with the fresh cookies.
 4. On refresh failure, `auth:expired` is dispatched to redirect the user to login.
+
+---
+
+## 📱 Active User Session & Device Management
+
+Users can view and manage their active login sessions across devices from **Settings -> Active Devices & Sessions**:
+
+- **Metadata Tracking**: Captures browser and OS details (parsed from `User-Agent`), IP address, and `last_used_at` timestamp.
+- **Endpoints**:
+  - `GET /api/v0/auth/sessions`: List active device session families, flagging `is_current`.
+  - `DELETE /api/v0/auth/sessions/{family_id}`: Remotely revoke a specific session family.
+  - `POST /api/v0/auth/sessions/revoke-others`: Revoke all active sessions except the user's current session.
+- **UI Component**: [ActiveSessionsCard.tsx](file:///home/ali/Projects/my-projects/inner-pages/my-inner-pages/frontend/src/components/settings/ActiveSessionsCard.tsx) renders device icons, current device badge, and single-click revocation buttons.

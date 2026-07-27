@@ -19,6 +19,9 @@ class RefreshToken(Document):
     token_hash: str = Field(...)
     family_id: str = Field(...)  # Token family identifier for reuse detection
     is_revoked: bool = Field(default=False)
+    user_agent: Optional[str] = Field(default=None)
+    ip_address: Optional[str] = Field(default=None)
+    last_used_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = Field(...)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

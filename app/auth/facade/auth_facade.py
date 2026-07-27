@@ -6,6 +6,7 @@ from typing import Optional
 
 from beanie import PydanticObjectId
 
+from app.auth.api.schemas.session import SessionResponse
 from app.auth.config import AuthModuleConfig
 from app.auth.db.models import User
 from app.auth.db.repository import UserRepository
@@ -17,6 +18,45 @@ from app.core.services.jwt_service import JWTService
 from app.core.services.password_service import PasswordService
 
 logger = get_logger(__name__)
+
+
+def parse_user_agent(ua_string: Optional[str]) -> tuple[str, str, str]:
+    """Parse User-Agent string into (device_name, browser, os)."""
+    if not ua_string:
+        return "Unknown Device", "Unknown Browser", "Unknown OS"
+
+    ua = ua_string.lower()
+
+    # OS detection
+    if "macintosh" in ua or "mac os" in ua:
+        os_name = "macOS"
+    elif "iphone" in ua or "ipad" in ua:
+        os_name = "iOS"
+    elif "android" in ua:
+        os_name = "Android"
+    elif "windows" in ua:
+        os_name = "Windows"
+    elif "linux" in ua:
+        os_name = "Linux"
+    else:
+        os_name = "Unknown OS"
+
+    # Browser detection
+    if "edg/" in ua or "edge" in ua:
+        browser_name = "Edge"
+    elif "chrome" in ua and "safari" in ua and "edg" not in ua:
+        browser_name = "Chrome"
+    elif "firefox" in ua:
+        browser_name = "Firefox"
+    elif "safari" in ua and "chrome" not in ua:
+        browser_name = "Safari"
+    elif "opera" in ua or "opr/" in ua:
+        browser_name = "Opera"
+    else:
+        browser_name = "Browser"
+
+    device_name = f"{browser_name} on {os_name}"
+    return device_name, browser_name, os_name
 
 
 class AuthFacade:
@@ -94,7 +134,11 @@ class AuthFacade:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     async def create_session_tokens(
-        self, user: User, family_id: Optional[str] = None
+        self,
+        user: User,
+        family_id: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        ip_address: Optional[str] = None,
     ) -> tuple[str, str]:
         """Generate access_token (JWT) and persistent rotating refresh_token in MongoDB.
 
@@ -114,16 +158,20 @@ class AuthFacade:
             token_hash=token_hash,
             family_id=token_family,
             expires_at=expires_at,
+            user_agent=user_agent,
+            ip_address=ip_address,
         )
         return access_token, raw_refresh_token
 
-    async def login(self, email: str, password: str) -> tuple[str, str, User]:
+    async def login(
+        self,
+        email: str,
+        password: str,
+        user_agent: Optional[str] = None,
+        ip_address: Optional[str] = None,
+    ) -> tuple[str, str, User]:
         """
         Authenticate user with email + password and return (access_token, refresh_token, user).
-
-        Raises:
-            ValueError: If credentials are invalid or the account is
-                        Google-only.
         """
         user = await self.repository.find_by_email(email)
         if not user:
@@ -146,11 +194,16 @@ class AuthFacade:
             raise ValueError("Please verify your email before logging in")
 
         await self.repository.update_last_login(user.id)
-        access_token, refresh_token = await self.create_session_tokens(user)
+        access_token, refresh_token = await self.create_session_tokens(
+            user, user_agent=user_agent, ip_address=ip_address
+        )
         return access_token, refresh_token, user
 
     async def refresh_access_token(
-        self, raw_refresh_token: str
+        self,
+        raw_refresh_token: str,
+        user_agent: Optional[str] = None,
+        ip_address: Optional[str] = None,
     ) -> tuple[str, str, User]:
         """Validate an incoming refresh token, rotate it, and return new access + refresh tokens.
 
@@ -187,11 +240,68 @@ class AuthFacade:
         if not user or not user.is_active:
             raise ValueError("User account is inactive or not found")
 
+        # Use updated user_agent and ip_address if provided, else fallback to token_doc values
+        ua = user_agent if user_agent else token_doc.user_agent
+        ip = ip_address if ip_address else token_doc.ip_address
+
         # Issue new token pair preserving the same family_id
         new_access_token, new_refresh_token = await self.create_session_tokens(
-            user=user, family_id=token_doc.family_id
+            user=user,
+            family_id=token_doc.family_id,
+            user_agent=ua,
+            ip_address=ip,
         )
         return new_access_token, new_refresh_token, user
+
+    async def get_user_sessions(
+        self, user: User, current_raw_refresh_token: Optional[str] = None
+    ) -> list[SessionResponse]:
+        """Fetch active session device families for the user."""
+        active_tokens = await self.repository.find_active_sessions_by_user(user.id)
+        current_hash = self._hash_token(current_raw_refresh_token) if current_raw_refresh_token else None
+        current_token_doc = (
+            await self.repository.find_refresh_token_by_hash(current_hash)
+            if current_hash
+            else None
+        )
+        current_family = current_token_doc.family_id if current_token_doc else None
+
+        sessions = []
+        for token_doc in active_tokens:
+            device_name, browser, os_name = parse_user_agent(token_doc.user_agent)
+            is_current = (current_family is not None) and (token_doc.family_id == current_family)
+            sessions.append(
+                SessionResponse(
+                    family_id=token_doc.family_id,
+                    device_name=device_name,
+                    browser=browser,
+                    os=os_name,
+                    ip_address=token_doc.ip_address,
+                    created_at=token_doc.created_at,
+                    last_used_at=token_doc.last_used_at,
+                    is_current=is_current,
+                )
+            )
+        return sessions
+
+    async def revoke_session(self, user: User, family_id: str) -> None:
+        """Revoke a specific session family for the user."""
+        await self.repository.revoke_token_family(family_id)
+
+    async def revoke_other_sessions(
+        self, user: User, current_raw_refresh_token: Optional[str]
+    ) -> int:
+        """Revoke all active session families for user except the current requesting family."""
+        if not current_raw_refresh_token:
+            raise ValueError("Current session refresh token missing")
+        current_hash = self._hash_token(current_raw_refresh_token)
+        current_token_doc = await self.repository.find_refresh_token_by_hash(current_hash)
+        if not current_token_doc or current_token_doc.is_revoked:
+            raise ValueError("Current session is invalid or revoked")
+
+        return await self.repository.revoke_all_other_families(
+            user_id=user.id, current_family_id=current_token_doc.family_id
+        )
 
     async def get_user_by_id(self, user_id: str) -> Optional[User]:
         """

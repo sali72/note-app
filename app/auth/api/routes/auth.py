@@ -15,8 +15,23 @@ from app.auth.deps import get_current_user
 from app.core.rate_limit import limiter
 
 
+from app.auth.api.schemas.session import SessionResponse, SessionListResponse
+
+
 # Router prefix is set in main.py, routes here are relative to /auth
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+def get_client_ip_and_ua(request: Request) -> tuple[str | None, str | None]:
+    ua = request.headers.get("user-agent")
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    elif request.client:
+        ip = request.client.host
+    else:
+        ip = None
+    return ua, ip
 
 
 @router.post(
@@ -81,9 +96,12 @@ async def login(
     The response body still contains the token for API clients.
     """
     try:
+        user_agent, ip_address = get_client_ip_and_ua(request)
         access_token, refresh_token, user = await facade.login(
             email=login_request.email,
-            password=login_request.password
+            password=login_request.password,
+            user_agent=user_agent,
+            ip_address=ip_address,
         )
         
         cookie_service.set_auth_cookie(response, access_token)
@@ -124,8 +142,11 @@ async def refresh(
         )
 
     try:
+        user_agent, ip_address = get_client_ip_and_ua(request)
         new_access_token, new_refresh_token, user = await facade.refresh_access_token(
-            raw_refresh_token
+            raw_refresh_token,
+            user_agent=user_agent,
+            ip_address=ip_address,
         )
         cookie_service.set_auth_cookie(response, new_access_token)
         cookie_service.set_refresh_cookie(response, new_refresh_token)
@@ -139,6 +160,63 @@ async def refresh(
         cookie_service.clear_all_cookies(response)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(e),
+        )
+
+
+@router.get(
+    "/sessions",
+    response_model=SessionListResponse,
+    summary="Get active user session devices",
+)
+async def get_active_sessions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    facade: AuthFacade = Depends(get_auth_facade),
+) -> SessionListResponse:
+    """Get all active device session families for current user."""
+    raw_refresh_token = request.cookies.get("refresh_token")
+    sessions = await facade.get_user_sessions(
+        user=current_user, current_raw_refresh_token=raw_refresh_token
+    )
+    return SessionListResponse(sessions=sessions, total_count=len(sessions))
+
+
+@router.delete(
+    "/sessions/{family_id}",
+    response_model=MessageResponse,
+    summary="Revoke a specific session device",
+)
+async def revoke_session(
+    family_id: str,
+    current_user: User = Depends(get_current_user),
+    facade: AuthFacade = Depends(get_auth_facade),
+) -> MessageResponse:
+    """Revoke a specific device session family."""
+    await facade.revoke_session(user=current_user, family_id=family_id)
+    return MessageResponse(message="Session revoked successfully")
+
+
+@router.post(
+    "/sessions/revoke-others",
+    response_model=MessageResponse,
+    summary="Revoke all other active session devices",
+)
+async def revoke_other_sessions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    facade: AuthFacade = Depends(get_auth_facade),
+) -> MessageResponse:
+    """Revoke all other device session families except the current requesting family."""
+    raw_refresh_token = request.cookies.get("refresh_token")
+    try:
+        count = await facade.revoke_other_sessions(
+            user=current_user, current_raw_refresh_token=raw_refresh_token
+        )
+        return MessageResponse(message=f"Revoked {count} other session(s)")
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
 
