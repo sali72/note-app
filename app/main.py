@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    from app.core.middleware import RequestLoggingMiddleware
+    from app.core.middleware import RequestLoggingMiddleware, SecurityHeadersMiddleware
     
     settings = get_settings()
 
@@ -110,6 +110,9 @@ def create_app() -> FastAPI:
         description="AI-boosted Journaling API with focus on self-knowledge",
         lifespan=lifespan,
     )
+
+    # Security headers middleware
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # Request logging middleware
     app.add_middleware(RequestLoggingMiddleware)

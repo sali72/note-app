@@ -1,0 +1,4 @@
+## 2026-07-27 - Added Missing Security Headers
+**Vulnerability:** The application was missing standard HTTP security headers (HSTS, CSP, X-Frame-Options, etc.), making it vulnerable to various client-side attacks like clickjacking and MIME-type sniffing.
+**Learning:** The FastAPI application used multiple middlewares (CORS, RequestLogging) but lacked a centralized security headers middleware. Adding a strict `default-src 'self'` CSP can break FastAPI's interactive `/docs` (Swagger UI) because it relies on inline scripts and external images.
+**Prevention:** Implement a `SecurityHeadersMiddleware` that adds these headers to all responses. When configuring CSP in a FastAPI app, ensure `unsafe-inline` and necessary external sources (e.g., `https://fastapi.tiangolo.com`) are allowed to preserve `/docs` functionality.
