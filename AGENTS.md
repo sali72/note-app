@@ -74,4 +74,4 @@ The AI chat uses SSE streaming over `POST /api/v0/chat/stream` instead of WebSoc
 ## Reference docs
 - `README.md` — setup guide, API endpoint reference, SSE chat protocol, .env config
 - `docs/architecture/` — architecture deep-dives, DI wiring, database design
-- `docs/features/` — feature-specific docs (tag system, caching, rate limiting, chat, user model, LLM providers)
+- `docs/features/` — feature-specific docs (authentication, tag system, caching, rate limiting, chat, user model, LLM providers)
