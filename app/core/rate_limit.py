@@ -52,6 +52,7 @@ def configure_limiter(settings):
     blue/green backend containers share the same rate limit state.
     """
     if not settings.rate_limit_enabled:
+        limiter.enabled = False
         logger.info("rate_limiter_disabled")
         return
 
