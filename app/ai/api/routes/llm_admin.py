@@ -289,6 +289,24 @@ async def test_providers(
     if not providers:
         return DiagnosticsResponse(total_models=0, working_models=0, failed_models=0, results=[])
 
+    if config.use_mock_llm:
+        results = [
+            ProviderTestResult(
+                index=i + 1,
+                model=p.litellm_params.model if p.litellm_params and p.litellm_params.model else p.model_name,
+                status="WORKING",
+                latency=0.001,
+                details="Response: 'pong' (mock)",
+            )
+            for i, p in enumerate(providers)
+        ]
+        return DiagnosticsResponse(
+            total_models=len(results),
+            working_models=len(results),
+            failed_models=0,
+            results=results,
+        )
+
     # Convert to format suitable for probing
     provider_dicts = [p.to_litellm_dict() for p in providers]
 

@@ -72,7 +72,7 @@ async def test_db_client(test_settings: Settings) -> AsyncGenerator[AsyncIOMotor
     """
     Create a MongoDB client for the test database.
     
-    This fixture creates a new database for testing and cleans it up after each test.
+    Clears motor cache per event loop and cleans up collection data after each test.
     
     Args:
         test_settings: Test settings fixture
@@ -80,32 +80,33 @@ async def test_db_client(test_settings: Settings) -> AsyncGenerator[AsyncIOMotor
     Yields:
         MongoDB client connected to test database
     """
-    # Clear the cached motor client to avoid event loop issues
+    # Clear cached motor client to avoid cross-event-loop issues
     from app.core.deps.database import create_motor_client
     create_motor_client.cache_clear()
-    
+
     # Reset rate limiter state to avoid interference between tests
     from app.core.rate_limit import limiter
     limiter.reset()
     
     client = AsyncIOMotorClient(test_settings.mongo_url)
+    db = client[test_settings.database_name]
     
     from app.ai.db.models import LLMProvider
 
-    # Initialize Beanie with test database
+    # Initialize Beanie for current event loop
     await init_beanie(
-        database=client[test_settings.database_name],
+        database=db,
         document_models=[User, RefreshToken, Journal, Tag, UserModel, Chat, LLMProvider, Feedback]
     )
-    
-    # Mark that Beanie is initialized to prevent re-initialization
-    client._beanie_initialized = True
     
     try:
         yield client
     finally:
-        # Cleanup: Drop the test database after test
-        await client.drop_database(test_settings.database_name)
+        # Fast cleanup: wipe collection documents while retaining indexes
+        collection_names = await db.list_collection_names()
+        for col in collection_names:
+            if not col.startswith("system."):
+                await db[col].delete_many({})
         client.close()
 
 

@@ -4,8 +4,8 @@ import bcrypt
 class PasswordService:
     """Service for password hashing and verification."""
     
-    def __init__(self):
-        self.rounds = 12  # bcrypt rounds for hashing
+    def __init__(self, rounds: int = 12):
+        self.rounds = rounds  # bcrypt rounds for hashing
     
     def hash_password(self, password: str) -> str:
         """

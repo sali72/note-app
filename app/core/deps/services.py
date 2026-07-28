@@ -11,9 +11,10 @@ def get_jwt_service(settings: Settings = Depends(get_settings)) -> JWTService:
     return JWTService(settings)
 
 
-def get_password_service() -> PasswordService:
-    """Get password service."""
-    return PasswordService()
+def get_password_service(settings: Settings = Depends(get_settings)) -> PasswordService:
+    """Get password service with injected settings (uses 4 rounds in testing for speed)."""
+    rounds = 4 if settings.environment == "testing" else settings.bcrypt_rounds
+    return PasswordService(rounds=rounds)
 
 
 def get_email_service(settings: Settings = Depends(get_settings)) -> EmailService:
