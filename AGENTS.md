@@ -6,6 +6,7 @@ Python 3.11+ FastAPI server with MongoDB/Beanie, LangChain AI, JWT auth.
 - `uv sync` — install dependencies
 - `uv run fastapi dev app/main.py` — dev server with hot reload
 - `uv run pytest` — run all tests (async, isolated test DB)
+- `uv run pytest -n auto` — run all tests in parallel across CPU cores
 - `uv run pytest tests/E2E/auth/ -v` — run specific test module
 - `uv add <package>` — add dependency
 

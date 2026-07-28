@@ -38,11 +38,12 @@ def monkeypatch_session():
 @pytest.fixture(scope="session", autouse=True)
 def test_settings(monkeypatch_session) -> Settings:
     """
-    Create test settings with a separate test database.
+    Create test settings with a separate test database (worker-isolated if using xdist).
     
     Returns:
         Settings configured for testing
     """
+    import os
     from app.core.deps.settings import get_settings
     from app.core.deps.database import create_motor_client
     
@@ -50,15 +51,18 @@ def test_settings(monkeypatch_session) -> Settings:
     get_settings.cache_clear()
     create_motor_client.cache_clear()
     
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    database_name = f"journaling_app_test_{worker_id}" if worker_id != "master" else "journaling_app_test"
+
     # Set environment variables for testing
-    monkeypatch_session.setenv("DATABASE_NAME", "journaling_app_test")
+    monkeypatch_session.setenv("DATABASE_NAME", database_name)
     monkeypatch_session.setenv("ENVIRONMENT", "testing")
     monkeypatch_session.setenv("JWT_SECRET_KEY", "test-secret-key-for-testing-only")
     monkeypatch_session.setenv("USE_MOCK_LLM", "true")
     
     test_settings_obj = Settings(
         mongo_url="mongodb://localhost:27017",
-        database_name="journaling_app_test",
+        database_name=database_name,
         environment="testing",
         jwt_secret_key="test-secret-key-for-testing-only",
         use_mock_llm=True,  # Always use mock LLM in tests to avoid API costs
@@ -102,11 +106,15 @@ async def test_db_client(test_settings: Settings) -> AsyncGenerator[AsyncIOMotor
     try:
         yield client
     finally:
-        # Fast cleanup: wipe collection documents while retaining indexes
+        # Fast concurrent cleanup: wipe collection documents while retaining indexes
         collection_names = await db.list_collection_names()
-        for col in collection_names:
-            if not col.startswith("system."):
-                await db[col].delete_many({})
+        delete_tasks = [
+            db[col].delete_many({})
+            for col in collection_names
+            if not col.startswith("system.")
+        ]
+        if delete_tasks:
+            await asyncio.gather(*delete_tasks)
         client.close()
 
 

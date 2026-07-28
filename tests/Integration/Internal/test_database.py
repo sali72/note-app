@@ -9,7 +9,10 @@ from app.chat.db.models import Chat
 from app.memory.db.models import UserModel
 
 
-TEST_DB_NAME = "journaling_app_integration_test"
+import os
+
+worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+TEST_DB_NAME = f"journaling_app_integration_test_{worker_id}" if worker_id != "master" else "journaling_app_integration_test"
 
 DOCUMENT_MODELS = [User, Journal, Chat, UserModel]
 

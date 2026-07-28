@@ -34,6 +34,7 @@ dev = [
     "pytest<8.0.0,>=7.4.3",
     "pytest-asyncio<1.0.0,>=0.23.2",
     "httpx<1.0.0,>=0.26.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [build-system]
